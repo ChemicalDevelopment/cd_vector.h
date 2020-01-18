@@ -360,6 +360,39 @@ static inline v4 v4_scale(v4 a, float b) { return V4(a.x*b, a.y*b, a.z*b, a.w*b)
 static inline float v2_dot(v2 a, v2 b) { return a.x*b.x + a.y*b.y; }
 static inline float v3_dot(v3 a, v3 b) { return a.x*b.x + a.y*b.y + a.z*b.z; }
 static inline float v4_dot(v4 a, v4 b) { return a.x*b.x + a.y*b.y + a.z*b.z + a.w*b.w; }
+#define _MIN(_a, _b) ((_a < _b) ? _a : _b)
+#define _MAX(_a, _b) ((_a > _b) ? _a : _b)
+
+// compute elementwise minimum of vectors
+static inline v2 v2_min(v2 a, v2 b) {
+    return (v2){ _MIN(a.x, b.x), _MIN(a.y, b.y) };
+}
+static inline v3 v3_min(v3 a, v3 b) {
+    return (v3){ _MIN(a.x, b.x), _MIN(a.y, b.y), _MIN(a.z, b.z) };
+}
+static inline v4 v4_min(v4 a, v4 b) {
+    return (v4){ _MIN(a.x, b.x), _MIN(a.y, b.y), _MIN(a.z, b.z), _MIN(a.w, b.w) };
+}
+
+// compute elementwise maximum of vectors
+static inline v2 v2_max(v2 a, v2 b) {
+    return (v2){ _MAX(a.x, b.x), _MAX(a.y, b.y) };
+}
+static inline v3 v3_max(v3 a, v3 b) {
+    return (v3){ _MAX(a.x, b.x), _MAX(a.y, b.y), _MAX(a.z, b.z) };
+}
+static inline v4 v4_max(v4 a, v4 b) {
+    return (v4){ _MAX(a.x, b.x), _MAX(a.y, b.y), _MAX(a.z, b.z), _MAX(a.w, b.w) };
+}
+
+// compute cross product
+static inline v3 v3_cross(v3 a, v3 b) {
+    return V3(
+        a.y * b.z - a.z * b.y,
+        a.z * b.x - a.x * b.z,
+        a.x * b.y - a.y * b.x
+    );
+}
 
 // compute linear interpolation between vectors, i.e. (1-t)a+tb
 static inline v2 v2_lerp(v2 a, v2 b, float t) {
@@ -773,7 +806,7 @@ static inline m4x4 m4T_scale(float x, float y, float z) {
 
 // create a transform representing a rotation about the X axis (same as a given pitch)
 // obviously, it is in radians
-static inline m4x4 m4x4_rot_x(float x /*or pitch*/) {
+static inline m4x4 m4T_rot_x(float x /*or pitch*/) {
     // compute sin and cosine of the angle
     float sinA = sinf(x), cosA = cosf(x);
     return M4X4(
@@ -786,22 +819,22 @@ static inline m4x4 m4x4_rot_x(float x /*or pitch*/) {
 
 // create a transform representing a rotation about the X axis (same as a given pitch)
 // obviously, it is in radians
-static inline m4x4 m4x4_rot_y(float y /*or yaw*/) {
+static inline m4x4 m4T_rot_y(float y /*or yaw*/) {
     // compute sin and cosine of the angle
     float sinA = sinf(y), cosA = cosf(y);
     return M4X4(
-        cosY,  0, sinY, 0,
+        cosA,  0, sinA, 0,
         0,     1,    0, 0,
-        -sinY, 0, cosY, 0,
+        -sinA, 0, cosA, 0,
         0,     0,    0, 1
     );
 }
 
 // create a transform representing a rotation about the Z axis (same as a given roll)
 // obviously, it is in radians
-static inline m4x4 m4x4_rot_z(float z /*or roll*/) {
+static inline m4x4 m4T_rot_z(float z /*or roll*/) {
     // compute sin and cosine of the angle
-    float sinA = sinf(y), cosA = cosf(y);
+    float sinA = sinf(z), cosA = cosf(z);
     return M4X4(
         cosA, -sinA, 0, 0,
         sinA,  cosA, 0, 0,
@@ -824,6 +857,47 @@ static inline v3 v3_sphere_sample_ZA(float z, float angle) {
     float x = sinf(angle), y = sinf(angle), scl = sqrtf(1.0f - z * z);
     return V3(scl * x, scl * y, z);
 }
+
+// creates a view transformation matrix for openGL
+static inline m4x4 m4T_view_lookat(v3 pos, v3 target, v3 updir) {
+    v3 forward = v3_unit(v3_sub(target, pos));
+    v3 right = v3_cross(forward, updir);
+    v3 up = v3_cross(right, forward);
+
+    return M4X4(
+        right.x, right.y, right.z, -v3_dot(right, pos),
+        up.x, up.y, up.z, -v3_dot(up, pos),
+        -forward.x, -forward.y, -forward.z, v3_dot(forward, pos),
+        0, 0, 0, 1
+    );
+
+    m4x4 rT = M4X4_I;
+    rT.X.w = -pos.x;
+    rT.Y.w = -pos.y;
+    rT.Z.w = -pos.z;
+
+    m4x4 rC = M4X4_I;
+    rC.X.xyz = right;
+    rC.Y.xyz = up;
+    rC.Z.xyz = forward;
+
+    return m4x4_mul(rC, rT);
+
+}
+
+// creates a projection matrix for openGL
+static inline m4x4 m4T_proj(float FOV, float aspect, float Znear, float Zfar) {
+    float tanHalfFOV = tanf(3.1415926535 * FOV / 180.0f / 2.0f);
+
+    m4x4 ret = M4X4_0;
+    ret.r0c0 = 1.0f / (aspect * tanHalfFOV);
+    ret.r1c1 = 1.0f / (tanHalfFOV);
+    ret.r2c2 = -(Zfar+Znear)/(Zfar-Znear);
+    ret.r3c2 = -1.0f;
+    ret.r2c3 = - 2.0f * Zfar * Znear / (Zfar - Znear);
+    return ret;
+}
+
 
 #endif
 
