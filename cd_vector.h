@@ -1,3 +1,4 @@
+
 /* cd_vector.h - Chemical Development C-style vector library
 
 Everything is contained in this header file, as static inline
@@ -21,6 +22,9 @@ AUTHOR: Cade Brown <brown.cade@gmail.com>
 
 // for sqrt*(), hypot*()
 #include <math.h>
+
+// for the boolean type
+#include <stdbool.h>
 
 /* structures */
 
@@ -360,6 +364,20 @@ static inline v4 v4_scale(v4 a, float b) { return V4(a.x*b, a.y*b, a.z*b, a.w*b)
 static inline float v2_dot(v2 a, v2 b) { return a.x*b.x + a.y*b.y; }
 static inline float v3_dot(v3 a, v3 b) { return a.x*b.x + a.y*b.y + a.z*b.z; }
 static inline float v4_dot(v4 a, v4 b) { return a.x*b.x + a.y*b.y + a.z*b.z + a.w*b.w; }
+
+// compute whether the vectors are exactly equal
+static inline bool v2_eq(v2 a, v2 b) { return a.x==b.x && a.y==b.y; }
+static inline bool v3_eq(v3 a, v3 b) { return a.x==b.x && a.y==b.y && a.z==b.z; }
+static inline bool v4_eq(v4 a, v4 b) { return a.x==b.x && a.y==b.y && a.z==b.w && a.z==b.w; }
+
+
+// compute whether the vectors are equal within a tolerance,
+// i.e. the difference between each component is <= tolerance
+static inline bool v2_eqe(v2 a, v2 b, float tol) { return fabsf(a.x-b.x) <= tol && fabsf(a.y-b.y) <= tol;}
+static inline bool v3_eqe(v3 a, v3 b, float tol) { return fabsf(a.x-b.x) <= tol && fabsf(a.y-b.y) <= tol && fabsf(a.z-b.z) <= tol; }
+static inline bool v4_eqe(v4 a, v4 b, float tol) { return fabsf(a.x-b.x) <= tol && fabsf(a.y-b.y) <= tol && fabsf(a.z-b.z) <= tol && fabsf(a.w-b.w) <= tol; }
+
+
 #define _MIN(_a, _b) ((_a < _b) ? _a : _b)
 #define _MAX(_a, _b) ((_a > _b) ? _a : _b)
 
@@ -385,15 +403,6 @@ static inline v4 v4_max(v4 a, v4 b) {
     return (v4){ _MAX(a.x, b.x), _MAX(a.y, b.y), _MAX(a.z, b.z), _MAX(a.w, b.w) };
 }
 
-// compute cross product
-static inline v3 v3_cross(v3 a, v3 b) {
-    return V3(
-        a.y * b.z - a.z * b.y,
-        a.z * b.x - a.x * b.z,
-        a.x * b.y - a.y * b.x
-    );
-}
-
 // compute linear interpolation between vectors, i.e. (1-t)a+tb
 static inline v2 v2_lerp(v2 a, v2 b, float t) {
     float tp = 1.0f - t;
@@ -408,7 +417,6 @@ static inline v4 v4_lerp(v4 a, v4 b, float t) {
     return V4(tp*a.x+t*b.x, tp*a.y+t*b.y, tp*a.z+t*b.z, tp*a.w+t*b.w);
 }
 
-
 // compute euclidean distance between 2 vectors
 static inline float v2_dist(v2 a, v2 b) {
     return v2_mag(v2_sub(a, b));
@@ -419,7 +427,6 @@ static inline float v3_dist(v3 a, v3 b) {
 static inline float v4_dist(v4 a, v4 b) {
     return v4_mag(v4_sub(a, b));
 }
-
 
 /* transforms */
 
@@ -440,6 +447,84 @@ static inline v4 v4_unit(v4 a) {
     float invmag = 1.0f / v4_mag(a);
     return V4(a.x*invmag, a.y*invmag, a.z*invmag, a.w*invmag);
 }
+
+
+// compute cross product
+static inline v3 v3_cross(v3 a, v3 b) {
+    return V3(
+        a.y * b.z - a.z * b.y,
+        a.z * b.x - a.x * b.z,
+        a.x * b.y - a.y * b.x
+    );
+}
+
+
+/* misc. graphics transforms & utilities */
+
+// reflect a vector (I: incidence) over another vector (N: normal)
+static inline v3 v3_refl(v3 I, v3 N) {
+    return v3_add(I, v3_scale(N, -2.0f * v3_dot(I, N)));
+}
+
+// refract a vector through a given surface of a given index of refraction
+static inline v3 v3_refract(v3 I, v3 N, float IOR) {
+    float cosi = v3_dot(I, N);
+    float etai = 1, etat = IOR;
+    if (cosi < 0) cosi = -cosi;
+    else {
+        // swap if pointed the other way
+        N = v3_neg(N);
+        float tmp = etai;
+        etai = etat;
+        etat = tmp;
+    }
+
+
+    // compute actual coef
+    float eta = etai / etat;
+    float k = 1 - eta * eta * (1 - cosi * cosi);
+
+    // I believe this is called total internal refraction/refraction
+    if (k < 0) return V3_0;
+    else {
+        // else, return the unit vector that has been refracted
+        return v3_unit(v3_add(v3_scale(I, eta), v3_scale(N, eta * cosi - sqrtf(k))));
+    }
+
+}
+
+// compute the fresnel value of a given material IOR
+static inline float v3_fresnel(v3 I, v3 N, float IOR) {
+    float cosi = v3_dot(I, N);
+    // clamp it
+    /**/ if (cosi < -1) cosi = -1;
+    else if (cosi >  1) cosi =  1;
+
+    float etai = 1, etat = IOR;
+    if (cosi > 0) {
+        // swap if the other direction
+        float tmp = etai;
+        etai = etat;
+        etat = tmp;
+    }
+
+    float sint = etai / etat * sqrtf(fmaxf(0.0f, 1.0f - cosi * cosi));
+    if (sint >= 1) return 1.0f;
+    else {
+        float cost = sqrtf(fmaxf(0.0f, 1.0f - sint * sint));
+        cosi = fabsf(cosi);
+
+        // some formulae
+        float Rs = ((etat * cosi) - (etai * cost)) / ((etat * cosi) + (etai * cost)); 
+        float Rp = ((etai * cosi) - (etat * cost)) / ((etai * cosi) + (etat * cost)); 
+        return (Rs * Rs + Rp * Rp) / 2; 
+    }
+
+}
+
+
+// comput
+
 
 
 /* matrix operators */
@@ -754,15 +839,6 @@ static inline v3 m3x3_mul_v3(m3x3 A, v3 b) {
 }
 
 
-
-/* misc. graphics transforms & utilities */
-
-// reflect a vector (I: incidence) over another vector (N: normal)
-static inline v3 v3_refl(v3 I, v3 N) {
-    return v3_add(I, v3_scale(N, -2.0f * v3_dot(I, N)));
-}
-
-
 /* geometric transforms (m4T_*) 
 
 These functions create matrices `M` such that:
@@ -897,6 +973,7 @@ static inline m4x4 m4T_proj(float FOV, float aspect, float Znear, float Zfar) {
     ret.r2c3 = - 2.0f * Zfar * Znear / (Zfar - Znear);
     return ret;
 }
+
 
 
 #endif
