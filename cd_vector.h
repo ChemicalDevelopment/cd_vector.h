@@ -360,6 +360,13 @@ static inline v2 v2_scale(v2 a, float b) { return V2(a.x*b, a.y*b); }
 static inline v3 v3_scale(v3 a, float b) { return V3(a.x*b, a.y*b, a.z*b); }
 static inline v4 v4_scale(v4 a, float b) { return V4(a.x*b, a.y*b, a.z*b, a.w*b); }
 
+
+// compute a fused-multiply-add (FMA), i.e. return a + b * c
+static inline v2 v2_fma(v2 a, v2 b, v2 c) { return V2(a.x+b.x*c.x, a.y+b.y*c.y); }
+static inline v3 v3_fma(v3 a, v3 b, v3 c) { return V3(a.x+b.x*c.x, a.y+b.y*c.y, a.z+b.z*c.z); }
+static inline v4 v4_fma(v4 a, v4 b, v4 c) { return V4(a.x+b.x*c.x, a.y+b.y*c.y, a.z+b.z*c.z, a.w+b.w*c.w); }
+
+
 // compute dot product, i.e. sum(a[i]*b[i])
 static inline float v2_dot(v2 a, v2 b) { return a.x*b.x + a.y*b.y; }
 static inline float v3_dot(v3 a, v3 b) { return a.x*b.x + a.y*b.y + a.z*b.z; }
@@ -369,7 +376,6 @@ static inline float v4_dot(v4 a, v4 b) { return a.x*b.x + a.y*b.y + a.z*b.z + a.
 static inline bool v2_eq(v2 a, v2 b) { return a.x==b.x && a.y==b.y; }
 static inline bool v3_eq(v3 a, v3 b) { return a.x==b.x && a.y==b.y && a.z==b.z; }
 static inline bool v4_eq(v4 a, v4 b) { return a.x==b.x && a.y==b.y && a.z==b.w && a.z==b.w; }
-
 
 // compute whether the vectors are equal within a tolerance,
 // i.e. the difference between each component is <= tolerance
@@ -657,6 +663,11 @@ static inline m4x4 m4x4_mul(m4x4 A, m4x4 B) {
     };
 }
 
+// multiply by vector
+static inline v4 m4x4_mul_v4(m4x4 A, v4 b) {
+    return V4(v4_dot(A.X, b), v4_dot(A.Y, b), v4_dot(A.Z, b), v4_dot(A.W, b));
+}
+
 // matrix determinant, i.e. det(A)
 static inline float m2x2_det(m2x2 A) {
     return A.a * A.d - A.b * A.c;
@@ -919,63 +930,76 @@ static inline m4x4 m4T_rot_z(float z /*or roll*/) {
     );
 }
 
-
 // transforms b into a linear space defined by: A (with the upper-left 3x3 mat being row transforms,
 // and and the upper left 3x1 vector is the xyz offset), the W row should be (0, 0, 0, 1)
 static inline v3 m4T_transform_direction(m4x4 A, v3 b) {
-    return v3_add(v3_add(v3_scale(A.X.xyz, b.x), v3_scale(A.Y.xyz, b.y)), v3_scale(A.Z.xyz, b.z));
-}
-
-/* geometric sampling methods */
-
-// generates a unit vector which lies on the unit sphere, given a Z coordinate and an angle
-static inline v3 v3_sphere_sample_ZA(float z, float angle) {
-    float x = sinf(angle), y = sinf(angle), scl = sqrtf(1.0f - z * z);
-    return V3(scl * x, scl * y, z);
+    return v3_add(
+        v3_add(
+            v3_scale(A.X.xyz, b.x), 
+            v3_scale(A.Y.xyz, b.y)
+        ), 
+        v3_scale(A.Z.xyz, b.z)
+    );
 }
 
 // creates a view transformation matrix for openGL
-static inline m4x4 m4T_view_lookat(v3 pos, v3 target, v3 updir) {
-    v3 forward = v3_unit(v3_sub(target, pos));
-    v3 right = v3_cross(forward, updir);
-    v3 up = v3_cross(right, forward);
+// this models a camera which is located at world position `pos`,
+// is looking at world position `target`, and has a normal of `updir`
+// The Default for updir should be V3_Y (i.e. (0, 1, 0), for normal orientation
+// use (0, -1, 0) for everything to be upside down)
+static inline m4x4 m4T_GL_view_lookat(v3 pos, v3 target, v3 updir) {
 
-    return M4X4(
-        right.x, right.y, right.z, -v3_dot(right, pos),
-        up.x, up.y, up.z, -v3_dot(up, pos),
-        -forward.x, -forward.y, -forward.z, v3_dot(forward, pos),
-        0, 0, 0, 1
+    // forward direction
+    v3 dirF = v3_unit(v3_sub(target, pos));
+    // right direction
+    v3 dirR = v3_cross(updir, dirF);
+    // recalculated up direction
+    v3 dirU = v3_cross(dirF, dirR);
+
+    /* construct matrix that effectively transforms coordinates into camera space
+     */
+    m4x4 result = M4X4(
+        dirR.x, dirR.y, dirR.z, -v3_dot(dirR, pos),
+        dirU.x, dirU.y, dirU.z, -v3_dot(dirU, pos),
+        dirF.x, dirF.y, dirF.z, -v3_dot(dirF, pos),
+             0,      0,      0,                  1
     );
 
-    m4x4 rT = M4X4_I;
-    rT.X.w = -pos.x;
-    rT.Y.w = -pos.y;
-    rT.Z.w = -pos.z;
+    // openGL has the Z direction be backwards (i.e. forward is -1), so correct for that
+    result.Z = v4_neg(result.Z);
 
-    m4x4 rC = M4X4_I;
-    rC.X.xyz = right;
-    rC.Y.xyz = up;
-    rC.Z.xyz = forward;
-
-    return m4x4_mul(rC, rT);
-
+    return result;
 }
 
 // creates a projection matrix for openGL
-static inline m4x4 m4T_proj(float FOV, float aspect, float Znear, float Zfar) {
-    float tanHalfFOV = tanf(3.1415926535 * FOV / 180.0f / 2.0f);
+static inline m4x4 m4T_GL_proj_persp(float FOV, float aspect, float Znear, float Zfar) {
+    // tan of half of the FOV
+    float thFOV = tanf((3.1415926535f / 180.0f) * (FOV / 2.0f));
 
-    m4x4 ret = M4X4_0;
-    ret.r0c0 = 1.0f / (aspect * tanHalfFOV);
-    ret.r1c1 = 1.0f / (tanHalfFOV);
-    ret.r2c2 = -(Zfar+Znear)/(Zfar-Znear);
-    ret.r3c2 = -1.0f;
-    ret.r2c3 = - 2.0f * Zfar * Znear / (Zfar - Znear);
-    return ret;
+    // compute range
+    float Zrange = Zfar - Znear;
+
+    // construct it
+    return M4X4(
+        1.0f / (thFOV * aspect), 0, 0, 0,
+        0, 1.0f / thFOV, 0, 0,
+        0, 0, -1/Zrange, 0,
+        0, 0, -2*Zfar*Znear/Zrange, 0
+    );
 }
 
 
+/* geometric sampling methods */
 
-#endif
+// generates a unit vector which lies on the unit sphere, given a Z coordinate (-1 to +1) and an angle (0 to 2PI)
+// NOTE: for an even distribution along the surface of this sphere, `z` and `angle` should be evenly distributed
+// between [-1, 1] and [0, 2PI]
+static inline v3 v3_sphere_sample_ZA(float z, float angle) {
+    float x = cosf(angle), y = sinf(angle), scl = sqrtf(1.0f - z * z);
+    return V3(scl * x, scl * y, z);
+}
+
+
+#endif /* CD_VECTOR_H__ */
 
 
